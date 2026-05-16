@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amin Pipeline Library</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <!-- Tailwind CSS для стилей -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Dexie.js для работы с IndexedDB -->
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+</head>
+<body class="bg-gray-100 font-sans pb-12">
+
+    <!-- Шапка -->
+    <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-10">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold">Amin Pipeline Library</h1>
+            <span id="online-status" class="bg-green-500 text-xs px-2 py-1 rounded">Онлайн</span>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-4 max-w-4xl">
+        <!-- Навигация по вкладкам -->
+        <div class="flex space-x-2 mb-6 bg-white p-2 rounded-lg shadow-sm">
+            <button onclick="switchTab('library')" id="tab-library" class="flex-1 py-2 text-center rounded bg-blue-600 text-white font-medium">Библиотека</button>
+            <button onclick="switchTab('quiz')" id="tab-quiz" class="flex-1 py-2 text-center rounded text-gray-600 font-medium">Тестирование</button>
+        </div>
+
+        <!-- ВКЛАДКА: БИБЛИОТЕКА -->
+        <section id="content-library" class="space-y-6">
+            <!-- Управление папками и файлами -->
+            <div class="bg-white p-4 rounded-lg shadow-sm space-y-4">
+                <h2 class="text-lg font-semibold text-gray-800">Управление хранилищем</h2>
+                <div class="flex flex-wrap gap-2">
+                    <input type="text" id="folder-name" placeholder="Имя новой папки" class="border p-2 rounded flex-1 min-w-[200px]">
+                    <button onclick="createFolder()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Создать папку</button>
+                </div>
+                <div class="border-t pt-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Загрузить файл в выбранную папку:</label>
+                    <div class="flex flex-wrap gap-2">
+                        <select id="folder-select" class="border p-2 rounded flex-1 min-w-[150px]"></select>
+                        <input type="file" id="file-input" class="border p-1 rounded flex-1 min-w-[200px]" accept=".pdf,.docx,.xlsx">
+                        <button onclick="uploadFile()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Загрузить</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Дерево папок и файлов -->
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">Ваши папки</h2>
+                <div id="folders-container" class="space-y-3">
+                    <!-- Сюда рендерятся папки и файлы -->
+                </div>
+            </div>
+
+            <!-- Просмотрщик файлов -->
+            <div id="file-viewer-container" class="bg-white p-4 rounded-lg shadow-sm hidden">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 id="viewer-title" class="font-bold text-gray-700">Просмотр файла</h3>
+                    <button onclick="closeViewer()" class="text-red-500 font-bold">Закрыть</button>
+                </div>
+                <div id="viewer-content" class="w-full h-[500px] border rounded bg-gray-50 flex items-center justify-center">
+                    <!-- Сюда вставляется iframe или текст -->
+                </div>
+            </div>
+        </section>
+
+        <!-- ВКЛАДКА: ТЕСТИРОВАНИЕ -->
+        <section id="content-quiz" class="hidden space-y-6">
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+                <h2 class="text-lg font-semibold text-gray-800 mb-4">Проверка знаний</h2>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Выберите материал для теста:</label>
+                <select id="quiz-material-select" class="border p-2 rounded w-full mb-4">
+                    <!-- Файлы для тестирования -->
+                </select>
+                <button onclick="startQuiz()" class="bg-purple-600 text-white px-6 py-2 rounded w-full font-medium hover:bg-purple-700">Начать тест</button>
+            </div>
+
+            <div id="quiz-box" class="bg-white p-6 rounded-lg shadow-sm hidden">
+                <div id="quiz-question" class="text-lg font-medium mb-4 text-gray-900"></div>
+                <div id="quiz-options" class="space-y-2 mb-6"></div>
+                <button onclick="submitAnswer()" class="bg-blue-600 text-white px-4 py-2 rounded">Ответить</button>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // --- БАЗА ДАННЫХ (IndexedDB через Dexie) ---
+        const db = new Dexie("AminPipelineDB");
+        db.version(1).stores({
+            folders: '++id, name',
+            files: '++id, folderId, name, type, data', // data — это Blob файла
+            quizzes: '++id, fileId, question, options, correctAnswer'
+        });
+
+        // --- ИНИЦИАЛИЗАЦИЯ И ИНТЕРФЕЙС ---
+        window.addEventListener('DOMContentLoaded', async () => {
+            initNetworkStatus();
+            await refreshData();
+            seedDummyQuizzes(); // Наполнить тестовыми вопросами
+        });
+
+        function initNetworkStatus() {
+            const statusNode = document.getElementById('online-status');
+            const updateStatus = () => {
+                if(navigator.onLine) {
+                    statusNode.textContent = "Онлайн";
+                    statusNode.className = "bg-green-500 text-xs px-2 py-1 rounded";
+                    // Здесь можно вызвать функцию синхронизации с Firebase/облаком
+                } else {
+                    statusNode.textContent = "Офлайн";
+                    statusNode.className = "bg-amber-500 text-xs px-2 py-1 rounded";
+                }
+            };
+            window.addEventListener('online', updateStatus);
+            window.addEventListener('offline', updateStatus);
+            updateStatus();
+        }
+
+        function switchTab(tab) {
+            document.getElementById('content-library').classList.toggle('hidden', tab !== 'library');
+            document.getElementById('content-quiz').classList.toggle('hidden', tab !== 'quiz');
+            document.getElementById('tab-library').className = tab === 'library' ? "flex-1 py-2 text-center rounded bg-blue-600 text-white font-medium" : "flex-1 py-2 text-center rounded text-gray-600 font-medium";
+            document.getElementById('tab-quiz').className = tab === 'quiz' ? "flex-1 py-2 text-center rounded bg-blue-600 text-white font-medium" : "flex-1 py-2 text-center rounded text-gray-600 font-medium";
+        }
+
+        async function refreshData() {
+            const folders = await db.folders.toArray();
+            const files = await db.files.toArray();
+
+            // Обновление селектов выбора папок
+            const select = document.getElementById('folder-select');
+            select.innerHTML = folders.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+
+            const quizSelect = document.getElementById('quiz-material-select');
+            quizSelect.innerHTML = files.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+
+            // Рендер папок и файлов
+            const container = document.getElementById('folders-container');
+            if(folders.length === 0) {
+                container.innerHTML = `<p class="text-gray-500 italic">Папок пока нет. Создайте первую!</p>`;
+                return;
+            }
+
+            container.innerHTML = folders.map(folder => {
+                const folderFiles = files.filter(f => f.folderId == folder.id);
+                return `
+                    <div class="border rounded-lg p-3 bg-gray-50">
+                        <div class="font-bold text-blue-700 flex items-center">
+                            📁 ${folder.name}
+                        </div>
+                        <ul class="pl-6 mt-2 space-y-1 list-disc text-sm text-gray-600">
+                            ${folderFiles.map(file => `
+                                <li class="hover:underline cursor-pointer text-blue-600 flex justify-between" onclick="viewFile(${file.id})">
+                                    📄 ${file.name} 
+                                    <span class="text-xs text-gray-400">(${file.type.split('/')[1] || 'file'})</span>
+                                </li>
+                            `).join('')}
+                            ${folderFiles.length === 0 ? '<li class="text-gray-400 italic list-none">Папка пуста</li>' : ''}
+                        </ul>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // --- ЛОГИКА ФАЙЛОВ И ПАПОК ---
+        async function createFolder() {
+            const nameInput = document.getElementById('folder-name');
+            if(!nameInput.value.trim()) return;
+            await db.folders.add({ name: nameInput.value.trim() });
+            nameInput.value = '';
+            await refreshData();
+        }
+
+        async function uploadFile() {
+            const folderId = document.getElementById('folder-select').value;
+            const fileInput = document.getElementById('file-input');
+            if(!folderId || !fileInput.files[0]) return alert('Выберите папку и файл!');
+
+            const file = fileInput.files[0];
+            
+            await db.files.add({
+                folderId: parseInt(folderId),
+                name: file.name,
+                type: file.type,
+                data: file // Сохраняем файл целиком как Blob
+            });
+
+            fileInput.value = '';
+            await refreshData();
+        }
+
+        async function viewFile(fileId) {
+            const file = await db.files.get(fileId);
+            if(!file) return;
+
+            const viewerContainer = document.getElementById('file-viewer-container');
+            const viewerContent = document.getElementById('viewer-content');
+            document.getElementById('viewer-title').textContent = file.name;
+            viewerContainer.classList.remove('hidden');
+
+            const fileUrl = URL.createObjectURL(file.data);
+
+            if (file.type === "application/pdf") {
+                // Открываем PDF во встроенном фрейме
+                viewerContent.innerHTML = `<iframe src="${fileUrl}" class="w-full h-full" frameborder="0"></iframe>`;
+            } else if (file.type.includes("word") || file.type.includes("excel") || file.type.includes("officedocument")) {
+                // В офлайне без тяжелых библиотек отображаем метаданные. 
+                // Для полноценного рендера docx/xlsx в офлайне нужны Mammoth.js / SheetJS.
+                viewerContent.innerHTML = `
+                    <div class="text-center p-4">
+                        <p class="mb-2 text-gray-700">📎 Документ Office <strong>${file.name}</strong> сохранен локально.</p>
+                        <a href="${fileUrl}" download="${file.name}" class="bg-green-600 text-white px-4 py-2 rounded text-sm inline-block">Скачать/Открыть в системе</a>
+                    </div>`;
+            } else {
+                viewerContent.innerHTML = `<p class="text-gray-500">Формат не поддерживается для прямого просмотра, но доступен офлайн.</p>`;
+            }
+        }
+
+        function closeViewer() {
+            document.getElementById('file-viewer-container').classList.add('hidden');
+            document.getElementById('viewer-content').innerHTML = '';
+        }
+
+        // --- ЛОГИКА ТЕСТИРОВАНИЯ ---
+        let currentQuestions = [];
+        let currentQuestionIndex = 0;
+
+        async function seedDummyQuizzes() {
+            const count = await db.quizzes.count();
+            if(count === 0) {
+                // Тестовые вопросы, если база пуста
+                await db.quizzes.bulkAdd([
+                    { fileId: 1, question: "Какое основное назначение нефтепровода?", options: ["Транспортировка газа", "Транспортировка нефти", "Хранение воды"], correctAnswer: 1 },
+                    { fileId: 1, question: "Какое давление считается стандартным для магистральных труб?", options: ["1-2 МПа", "5-10 МПа", "50-100 МПа"], correctAnswer: 1 }
+                ]);
+            }
+        }
+
+        async function startQuiz() {
+            const fileId = document.getElementById('quiz-material-select').value;
+            // Ищем вопросы привязанные к файлу (или берем общие для примера)
+            currentQuestions = await db.quizzes.toArray(); 
+            currentQuestionIndex = 0;
+
+            if(currentQuestions.length === 0) {
+                alert("Для этого материала вопросов пока нет.");
+                return;
+            }
+
+            document.getElementById('quiz-box').classList.remove('hidden');
+            showQuestion();
+        }
+
+        function showQuestion() {
+            const q = currentQuestions[currentQuestionIndex];
+            document.getElementById('quiz-question').textContent = `Вопрос ${currentQuestionIndex + 1}: ${q.question}`;
+            
+            const optionsHtml = q.options.map((opt, idx) => `
+                <label class="flex items-center space-x-3 p-2 border rounded hover:bg-gray-50 cursor-pointer">
+                    <input type="radio" name="quiz-opt" value="${idx}" class="form-radio h-4 w-4 text-blue-600">
+                    <span>${opt}</span>
+                </label>
+            `).join('');
+            
+            document.getElementById('quiz-options').innerHTML = optionsHtml;
+        }
+
+        function submitAnswer() {
+            const selected = document.querySelector('input[name="quiz-opt"]:checked');
+            if(!selected) return alert("Выберите вариант ответа!");
+
+            const answerIdx = parseInt(selected.value);
+            const q = currentQuestions[currentQuestionIndex];
+
+            if(answerIdx === q.correctAnswer) {
+                alert("Правильно!");
+            } else {
+                alert(`Неверно. Правильный ответ: ${q.options[q.correctAnswer]}`);
+            }
+
+            currentQuestionIndex++;
+            if(currentQuestionIndex < currentQuestions.length) {
+                showQuestion();
+            } else {
+                alert("Тестирование завершено!");
+                document.getElementById('quiz-box').classList.add('hidden');
+            }
+        }
+
+        // --- РЕГИСТРАЦИЯ SERVICE WORKER ---
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('Service Worker успешно зарегистрирован!'))
+                .catch(err => console.error('Ошибка SW:', err));
+        }
+    </script>
+</body>
+</html>
